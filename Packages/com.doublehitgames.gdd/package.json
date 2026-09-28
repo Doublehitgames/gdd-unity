@@ -1,0 +1,19 @@
+{
+  "name": "com.doublehitgames.gdd",
+  "version": "0.0.1",
+  "displayName": "GDD Manager",
+  "description": "Brings your GDD Manager game design document into the Unity Editor: read linked design pages without leaving the engine, and document the technical side of the project (editor tools, packages, builds) automatically. Editor-only — adds nothing to player builds.",
+  "unity": "6000.0",
+  "author": {
+    "name": "Doublehitgames",
+    "url": "https://github.com/Doublehitgames"
+  },
+  "documentationUrl": "https://github.com/Doublehitgames/gdd-unity#readme",
+  "changelogUrl": "https://github.com/Doublehitgames/gdd-unity/blob/master/Packages/com.doublehitgames.gdd/CHANGELOG.md",
+  "keywords": [
+    "gdd",
+    "game design document",
+    "documentation",
+    "editor"
+  ]
+}
