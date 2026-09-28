@@ -34,7 +34,7 @@ namespace Doublehitgames.Gdd.Editor.Window
         GddApiClient _api;
         GddMe _me;
         List<PageNode> _roots = new List<PageNode>();
-        Dictionary<string, GddSection> _byTitle = new Dictionary<string, GddSection>(StringComparer.OrdinalIgnoreCase);
+        PageIndex _pages = PageIndex.Empty;
         CancellationTokenSource _signIn;
         // Bumped on every reload, so a slow answer to an old request is dropped.
         int _generation;
@@ -435,7 +435,7 @@ namespace Doublehitgames.Gdd.Editor.Window
             }
 
             var linkColor = EditorGUIUtility.isProSkin ? "#6CB4FF" : "#0B63CE";
-            var body = new Label(MarkdownText.ToRichText(section.content, t => _byTitle.ContainsKey(t), linkColor))
+            var body = new Label(MarkdownText.ToRichText(section.content, _pages, linkColor))
             {
                 enableRichText = true,
                 style = { whiteSpace = WhiteSpace.Normal },
@@ -449,8 +449,8 @@ namespace Doublehitgames.Gdd.Editor.Window
         {
             if (link.StartsWith(MarkdownText.RefLinkPrefix, StringComparison.Ordinal))
             {
-                var title = link.Substring(MarkdownText.RefLinkPrefix.Length);
-                if (!_byTitle.TryGetValue(title, out var target)) return;
+                var target = _pages.ById(link.Substring(MarkdownText.RefLinkPrefix.Length));
+                if (target == null) return;
                 _selectedId = target.id;
                 if (!string.IsNullOrEmpty(_search))
                 {
@@ -467,10 +467,7 @@ namespace Doublehitgames.Gdd.Editor.Window
         void SetPages(GddSection[] sections)
         {
             _roots = PageTree.Build(sections);
-            _byTitle = new Dictionary<string, GddSection>(StringComparer.OrdinalIgnoreCase);
-            foreach (var section in sections)
-                if (!string.IsNullOrEmpty(section.title) && !_byTitle.ContainsKey(section.title))
-                    _byTitle[section.title] = section;
+            _pages = new PageIndex(sections);
         }
 
         void ShowMessage(string message, params (string label, Action action)[] actions)

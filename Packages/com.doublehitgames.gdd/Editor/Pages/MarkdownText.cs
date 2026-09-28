@@ -1,4 +1,3 @@
-using System;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -26,9 +25,9 @@ namespace Doublehitgames.Gdd.Editor.Pages
 
         static readonly int[] HeadingSizes = { 160, 140, 120, 110, 100, 100 };
 
-        /// <param name="isKnownPage">Whether a $[Title] names a page that exists, so only those become links.</param>
+        /// <param name="pages">Resolves $[Title] and $[#id]; only references it finds become links.</param>
         /// <param name="linkColor">Hex colour for links, e.g. "#4C9AFF".</param>
-        public static string ToRichText(string markdown, Func<string, bool> isKnownPage, string linkColor)
+        public static string ToRichText(string markdown, PageIndex pages, string linkColor)
         {
             if (string.IsNullOrEmpty(markdown)) return "";
 
@@ -52,30 +51,34 @@ namespace Doublehitgames.Gdd.Editor.Pages
                 if (heading.Success)
                 {
                     var size = HeadingSizes[heading.Groups[1].Length - 1];
-                    sb.Append($"<size={size}%><b>").Append(Inline(heading.Groups[2].Value, isKnownPage, linkColor)).Append("</b></size>");
+                    sb.Append($"<size={size}%><b>").Append(Inline(heading.Groups[2].Value, pages, linkColor)).Append("</b></size>");
                     continue;
                 }
 
                 var bullet = Bullet.Match(raw);
                 if (bullet.Success)
                 {
-                    sb.Append(bullet.Groups[1].Value).Append("• ").Append(Inline(bullet.Groups[2].Value, isKnownPage, linkColor));
+                    sb.Append(bullet.Groups[1].Value).Append("• ").Append(Inline(bullet.Groups[2].Value, pages, linkColor));
                     continue;
                 }
 
                 var quote = Quote.Match(raw);
                 if (quote.Success)
                 {
-                    sb.Append("<i>│ ").Append(Inline(quote.Groups[1].Value, isKnownPage, linkColor)).Append("</i>");
+                    sb.Append("<i>│ ").Append(Inline(quote.Groups[1].Value, pages, linkColor)).Append("</i>");
                     continue;
                 }
 
-                sb.Append(Inline(raw, isKnownPage, linkColor));
+                sb.Append(Inline(raw, pages, linkColor));
             }
             return sb.ToString();
         }
 
-        static string Inline(string text, Func<string, bool> isKnownPage, string linkColor)
+        // For text that comes from elsewhere (a referenced page's title) and is
+        // inserted after the line was escaped.
+        static string Escape(string s) => (s ?? "").Replace("<", EscapedLt);
+
+        static string Inline(string text, PageIndex pages, string linkColor)
         {
             // Escape first, so a literal "<b>" in the document stays text. The
             // markdown markers below contain no "<", so escaping cannot break them.
@@ -87,10 +90,12 @@ namespace Doublehitgames.Gdd.Editor.Pages
             text = Link.Replace(text, m => $"<link=\"{m.Groups[2].Value}\"><color={linkColor}><u>{m.Groups[1].Value}</u></color></link>");
             text = PageRef.Replace(text, m =>
             {
-                var title = m.Groups[1].Value;
-                return isKnownPage(title)
-                    ? $"<link=\"{RefLinkPrefix}{title}\"><color={linkColor}><u>{title}</u></color></link>"
-                    : title;
+                var reference = m.Groups[1].Value;
+                var page = pages.Resolve(reference);
+                if (page != null)
+                    return $"<link=\"{RefLinkPrefix}{page.id}\"><color={linkColor}><u>{Escape(page.title)}</u></color></link>";
+                // An id says nothing to a reader; a title is still worth showing.
+                return reference.TrimStart().StartsWith("#") ? "<i>[missing page]</i>" : reference;
             });
             text = Bold.Replace(text, "<b>$1</b>");
             text = Italic.Replace(text, "<i>$1</i>");
