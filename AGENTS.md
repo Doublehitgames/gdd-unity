@@ -37,6 +37,20 @@ Instalação por git URL:
 Unity mínimo: **6000.0**. O sandbox roda na 6000.0.68f1 — não subir a versão do
 sandbox sem decidir junto subir o `"unity"` do `package.json`.
 
+### Ferramentas do sandbox (não são dependência do plugin)
+
+O `Packages/manifest.json` do sandbox traz o **MCP for Unity**
+(`com.coplaydev.unity-mcp`, fixado no mesmo commit do Colheita Feliz — os dois
+projetos falam com o mesmo servidor MCP) e o **Test Framework**. O
+`package.json` do plugin **não** depende de nenhum dos dois: quem instala o GDD
+Manager não recebe o MCP.
+
+- Para o agente conectar, o Unity precisa estar aberto e com **Window → MCP for
+  Unity → Start Session**.
+- Antes de agir, confirmar que a instância é o sandbox (`Application.dataPath`
+  terminando em `gdd-unity/Assets`) — o Colheita pode estar aberto ao mesmo tempo.
+- O log do MCP (`Assets/UnityMCP/`) fica fora do git: repo público.
+
 ## Princípios que não se negociam
 
 - **Só editor.** Todo código em assembly com `includePlatforms: ["Editor"]`.

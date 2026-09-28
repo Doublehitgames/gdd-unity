@@ -9,6 +9,10 @@
 /[Mm]emoryCaptures/
 /[Rr]ecordings/
 
+# MCP for Unity (ferramenta de dev do sandbox) — log local, pode ter código e caminhos da máquina
+/[Aa]ssets/UnityMCP/
+/[Aa]ssets/UnityMCP.meta
+
 # IDE
 .vs/
 .vscode/
