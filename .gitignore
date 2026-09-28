@@ -13,6 +13,10 @@
 /[Aa]ssets/UnityMCP/
 /[Aa]ssets/UnityMCP.meta
 
+# Vínculo do sandbox com um GDD — em projeto de verdade esse arquivo É versionado
+# (é como o time compartilha o vínculo); aqui cada dev liga no GDD que quiser testar.
+/ProjectSettings/GddManager.json
+
 # IDE
 .vs/
 .vscode/
