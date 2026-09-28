@@ -20,9 +20,18 @@ Requires Git installed on the machine. Unity 6000.0 or newer.
 ## The GDD window
 
 **Window → GDD Manager** opens a dockable window with the document's page tree
-and the selected page beside it. References to other pages (`$[Page]`) are
-links: clicking one jumps to that page. Search filters the tree by title and
-text.
+and the selected page beside it. Search filters the tree by title and text.
+
+Getting around a large document:
+
+- **References preview first.** Clicking a reference to another page opens a
+  preview of it over the current one; *Go to page* goes there.
+  Ctrl+click (Cmd+click on macOS) goes straight to the page.
+- **Back and forward** work as in a browser: the toolbar arrows, Alt+← / Alt+→,
+  or the mouse's side buttons.
+- **The trail above the title** shows where the page sits in the document;
+  each step is clickable.
+- Jumping to a page folds the tree down to that page's path.
 
 ### Signing in
 

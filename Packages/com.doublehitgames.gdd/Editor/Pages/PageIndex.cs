@@ -31,6 +31,21 @@ namespace Doublehitgames.Gdd.Editor.Pages
 
         public GddSection ById(string id) => id != null && _byId.TryGetValue(id, out var s) ? s : null;
 
+        /// <summary>The pages above this one, top first. Stops at a missing parent or a loop.</summary>
+        public List<GddSection> Ancestors(GddSection section)
+        {
+            var chain = new List<GddSection>();
+            var seen = new HashSet<string> { section.id };
+            var parent = ById(section.parentId);
+            while (parent != null && seen.Add(parent.id))
+            {
+                chain.Add(parent);
+                parent = ById(parent.parentId);
+            }
+            chain.Reverse();
+            return chain;
+        }
+
         /// <param name="reference">What sits between <c>$[</c> and <c>]</c>.</param>
         public GddSection Resolve(string reference)
         {

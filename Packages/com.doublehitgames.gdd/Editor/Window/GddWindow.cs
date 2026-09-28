@@ -27,6 +27,7 @@ namespace Doublehitgames.Gdd.Editor.Window
 
         [SerializeField] string _selectedId;
         [SerializeField] string _search;
+        [SerializeField] NavigationHistory _history = new NavigationHistory();
 
         readonly IHttpTransport _transport = new UnityWebRequestTransport();
         GddProjectSettings _settings;
@@ -44,6 +45,9 @@ namespace Doublehitgames.Gdd.Editor.Window
         TreeView _tree;
         ScrollView _detailScroll;
         VisualElement _detail;
+        VisualElement _preview;
+        ToolbarButton _backButton;
+        ToolbarButton _forwardButton;
 
         [MenuItem("Window/GDD Manager")]
         public static void Open()
@@ -60,6 +64,10 @@ namespace Doublehitgames.Gdd.Editor.Window
             _status = new HelpBox("", HelpBoxMessageType.Info) { style = { display = DisplayStyle.None, marginTop = 4 } };
             rootVisualElement.Add(_body);
             rootVisualElement.Add(_status);
+            // Trickle-down so back/forward work wherever the focus is in the window.
+            rootVisualElement.focusable = true;
+            rootVisualElement.RegisterCallback<KeyDownEvent>(OnNavigationKey, TrickleDown.TrickleDown);
+            rootVisualElement.RegisterCallback<PointerDownEvent>(OnMouseSideButton, TrickleDown.TrickleDown);
             Reload();
         }
 
@@ -321,6 +329,12 @@ namespace Doublehitgames.Gdd.Editor.Window
             _body.Clear();
 
             var toolbar = new Toolbar();
+            _backButton = NavButton("tab_prev", "‹", "Back (Alt+←)", GoBack);
+            _forwardButton = NavButton("tab_next", "›", "Forward (Alt+→)", GoForward);
+            toolbar.Add(_backButton);
+            toolbar.Add(_forwardButton);
+            UpdateNavButtons();
+
             var menu = new ToolbarMenu { text = _settings.projectTitle ?? "GDD" };
             menu.menu.AppendAction("Open in browser", _ => Application.OpenURL(GddServer.ProjectPageUrl(_settings.Server, _settings.projectId)));
             menu.menu.AppendAction("Link to another GDD…", _ => PickAnotherProject());
@@ -357,6 +371,9 @@ namespace Doublehitgames.Gdd.Editor.Window
                 var section = items.OfType<GddSection>().FirstOrDefault();
                 if (section == null) return;
                 _selectedId = section.id;
+                // Back/forward already moved the history; revisiting the current page is a no-op.
+                _history.Visit(section.id);
+                UpdateNavButtons();
                 ShowDetail(section);
             };
             // Each side sits in a plain pane: the split view sizes its fixed pane
@@ -408,6 +425,10 @@ namespace Doublehitgames.Gdd.Editor.Window
         {
             _detail.Clear();
             _detailScroll.scrollOffset = Vector2.zero;
+            ClosePreview();
+
+            var trail = Breadcrumb(section);
+            if (trail != null) _detail.Add(trail);
 
             var title = Title(section.title);
             title.style.marginBottom = 2;
@@ -434,40 +455,213 @@ namespace Doublehitgames.Gdd.Editor.Window
                 return;
             }
 
-            var linkColor = EditorGUIUtility.isProSkin ? "#6CB4FF" : "#0B63CE";
-            var body = new Label(MarkdownText.ToRichText(section.content, _pages, linkColor))
+            _detail.Add(PageBody(section.content));
+        }
+
+        Label PageBody(string content)
+        {
+            var body = new Label(MarkdownText.ToRichText(content, _pages, LinkColor))
             {
                 enableRichText = true,
                 style = { whiteSpace = WhiteSpace.Normal },
             };
             body.selection.isSelectable = true;
-            body.RegisterCallback<PointerUpLinkTagEvent>(e => FollowLink(e.linkID));
-            _detail.Add(body);
+            body.RegisterCallback<PointerUpLinkTagEvent>(e => FollowLink(e.linkID, e.position, e.actionKey));
+            return body;
         }
 
-        void FollowLink(string link)
+        static string LinkColor => EditorGUIUtility.isProSkin ? "#6CB4FF" : "#0B63CE";
+
+        /// <summary>
+        /// A page reference opens a preview first, as on the web: most of the
+        /// time the reader only wants to know what the page is, and jumping
+        /// away from 250 pages is how people get lost. Ctrl/Cmd+click jumps.
+        /// </summary>
+        void FollowLink(string link, Vector2 at, bool jump)
         {
             if (link.StartsWith(MarkdownText.RefLinkPrefix, StringComparison.Ordinal))
             {
                 var target = _pages.ById(link.Substring(MarkdownText.RefLinkPrefix.Length));
                 if (target == null) return;
-                _selectedId = target.id;
-                if (!string.IsNullOrEmpty(_search))
-                {
-                    _search = "";
-                    ShowPages();
-                }
-                else FillTree();
+                if (jump) GoTo(target.id);
+                else ShowPreview(target, at);
                 return;
             }
             if (Uri.TryCreate(link, UriKind.Absolute, out var uri) && (uri.Scheme == "https" || uri.Scheme == "http"))
                 Application.OpenURL(link);
         }
 
+        // ── Navigation ──────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Opens a page by jumping to it (a link, the trail, back/forward). The
+        /// tree folds up to the path of the new page, so a few jumps do not leave
+        /// every branch of the document open.
+        /// </summary>
+        void GoTo(string id)
+        {
+            if (_tree == null || _pages.ById(id) == null) return;
+            ClosePreview();
+            _selectedId = id;
+            if (!string.IsNullOrEmpty(_search))
+            {
+                _search = "";
+                ShowPages();
+                return;
+            }
+            _tree.CollapseAll();
+            FillTree();
+        }
+
+        void GoBack()
+        {
+            var id = _history.GoBack();
+            if (id != null) GoTo(id);
+            UpdateNavButtons();
+        }
+
+        void GoForward()
+        {
+            var id = _history.GoForward();
+            if (id != null) GoTo(id);
+            UpdateNavButtons();
+        }
+
+        void UpdateNavButtons()
+        {
+            _backButton?.SetEnabled(_history.CanGoBack);
+            _forwardButton?.SetEnabled(_history.CanGoForward);
+        }
+
+        void OnNavigationKey(KeyDownEvent e)
+        {
+            if (e.keyCode == KeyCode.Escape && _preview != null)
+            {
+                ClosePreview();
+                e.StopPropagation();
+            }
+            else if (e.altKey && e.keyCode == KeyCode.LeftArrow)
+            {
+                GoBack();
+                e.StopPropagation();
+            }
+            else if (e.altKey && e.keyCode == KeyCode.RightArrow)
+            {
+                GoForward();
+                e.StopPropagation();
+            }
+        }
+
+        void OnMouseSideButton(PointerDownEvent e)
+        {
+            // The side buttons of the mouse, as in a browser.
+            if (e.button == 3) GoBack();
+            else if (e.button == 4) GoForward();
+            else return;
+            e.StopPropagation();
+        }
+
+        /// <summary>“Mecânicas › Animais ›” above the title: where in the document this page sits.</summary>
+        VisualElement Breadcrumb(GddSection section)
+        {
+            var ancestors = _pages.Ancestors(section);
+            if (ancestors.Count == 0) return null;
+
+            var row = new VisualElement { style = { flexDirection = FlexDirection.Row, flexWrap = Wrap.Wrap, marginBottom = 2 } };
+            foreach (var ancestor in ancestors)
+            {
+                var crumb = new Label(ancestor.title) { enableRichText = false, tooltip = "Go to " + ancestor.title };
+                crumb.style.fontSize = 11;
+                crumb.style.color = new StyleColor(ColorUtility.TryParseHtmlString(LinkColor, out var c) ? c : Color.gray);
+                crumb.RegisterCallback<ClickEvent>(_ => GoTo(ancestor.id));
+                crumb.RegisterCallback<PointerEnterEvent>(_ => crumb.style.unityFontStyleAndWeight = FontStyle.Bold);
+                crumb.RegisterCallback<PointerLeaveEvent>(_ => crumb.style.unityFontStyleAndWeight = FontStyle.Normal);
+                row.Add(crumb);
+
+                var separator = new Label("›") { style = { fontSize = 11, opacity = 0.5f, marginLeft = 3, marginRight = 3 } };
+                row.Add(separator);
+            }
+            return row;
+        }
+
+        // ── Preview ─────────────────────────────────────────────────────────
+
+        void ShowPreview(GddSection section, Vector2 at)
+        {
+            ClosePreview();
+
+            // A transparent layer over the window: a click outside the card closes it.
+            _preview = new VisualElement { style = { position = Position.Absolute, left = 0, top = 0, right = 0, bottom = 0 } };
+            _preview.RegisterCallback<PointerDownEvent>(e =>
+            {
+                if (e.target == _preview) ClosePreview();
+            });
+
+            var dark = EditorGUIUtility.isProSkin;
+            var card = new VisualElement();
+            card.style.position = Position.Absolute;
+            card.style.width = Mathf.Min(400, position.width - 16);
+            card.style.maxHeight = Mathf.Min(380, position.height - 16);
+            card.style.backgroundColor = dark ? new Color(0.20f, 0.20f, 0.20f) : new Color(0.94f, 0.94f, 0.94f);
+            var border = dark ? new Color(0.09f, 0.09f, 0.09f) : new Color(0.6f, 0.6f, 0.6f);
+            card.style.borderTopColor = card.style.borderBottomColor = card.style.borderLeftColor = card.style.borderRightColor = border;
+            card.style.borderTopWidth = card.style.borderBottomWidth = card.style.borderLeftWidth = card.style.borderRightWidth = 1;
+            card.style.borderTopLeftRadius = card.style.borderTopRightRadius = card.style.borderBottomLeftRadius = card.style.borderBottomRightRadius = 6;
+            card.style.paddingLeft = card.style.paddingRight = 10;
+            card.style.paddingTop = card.style.paddingBottom = 8;
+
+            var path = _pages.Ancestors(section);
+            if (path.Count > 0)
+                card.Add(Paragraph(string.Join(" › ", path.Select(p => p.title)), small: true));
+            var title = Title(section.title);
+            title.style.fontSize = 14;
+            card.Add(title);
+
+            var scroll = new ScrollView(ScrollViewMode.Vertical) { style = { flexShrink = 1 } };
+            if (string.IsNullOrWhiteSpace(section.content))
+                scroll.Add(Paragraph("This page has no description yet.", small: true));
+            else
+                scroll.Add(PageBody(section.content));
+            card.Add(scroll);
+
+            var buttons = new VisualElement { style = { flexDirection = FlexDirection.Row, justifyContent = Justify.FlexEnd, marginTop = 8 } };
+            buttons.Add(new Button(ClosePreview) { text = "Close" });
+            var go = new Button(() => GoTo(section.id)) { text = "Go to page" };
+            go.style.unityFontStyleAndWeight = FontStyle.Bold;
+            buttons.Add(go);
+            card.Add(buttons);
+
+            // Placed once its size is known: below the click, or above it when
+            // there is no room, and always inside the window.
+            card.style.visibility = Visibility.Hidden;
+            card.RegisterCallback<GeometryChangedEvent>(_ =>
+            {
+                var size = card.layout.size;
+                var area = rootVisualElement.layout.size;
+                var x = Mathf.Clamp(at.x - 24, 8, Mathf.Max(8, area.x - size.x - 8));
+                var y = at.y + 14;
+                if (y + size.y > area.y - 8) y = at.y - 14 - size.y;
+                card.style.left = x;
+                card.style.top = Mathf.Clamp(y, 8, Mathf.Max(8, area.y - size.y - 8));
+                card.style.visibility = Visibility.Visible;
+            });
+
+            _preview.Add(card);
+            rootVisualElement.Add(_preview);
+            rootVisualElement.Focus();
+        }
+
+        void ClosePreview()
+        {
+            _preview?.RemoveFromHierarchy();
+            _preview = null;
+        }
+
         void SetPages(GddSection[] sections)
         {
             _roots = PageTree.Build(sections);
             _pages = new PageIndex(sections);
+            _history.Prune(id => _pages.ById(id) != null);
         }
 
         void ShowMessage(string message, params (string label, Action action)[] actions)
@@ -495,6 +689,15 @@ namespace Doublehitgames.Gdd.Editor.Window
         }
 
         void ClearStatus() => _status.style.display = DisplayStyle.None;
+
+        static ToolbarButton NavButton(string icon, string fallbackText, string tooltip, Action action)
+        {
+            var button = new ToolbarButton(action) { tooltip = tooltip };
+            var image = EditorGUIUtility.FindTexture((EditorGUIUtility.isProSkin ? "d_" : "") + icon);
+            if (image != null) button.iconImage = Background.FromTexture2D(image);
+            else button.text = fallbackText;
+            return button;
+        }
 
         static VisualElement Pane(VisualElement content)
         {
