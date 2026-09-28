@@ -87,5 +87,43 @@ namespace Doublehitgames.Gdd.Editor.Tests
             Assert.AreEqual("<i>[image: map]</i>", Render("![map](https://x/map.png)"));
             Assert.AreEqual("<link=\"https://x.com\"><color=#00F><u>site</u></color></link>", Render("[site](https://x.com)"));
         }
+
+        [Test]
+        public void AShortDescriptionIsItsOwnExcerpt()
+        {
+            Assert.AreEqual("One line.\nTwo.", MarkdownText.Excerpt("  One line.\r\nTwo.\n", 100, out var truncated));
+            Assert.IsFalse(truncated);
+        }
+
+        [Test]
+        public void AnExcerptEndsAtALine()
+        {
+            var excerpt = MarkdownText.Excerpt("First paragraph here.\nSecond one, which goes past the limit.", 30, out var truncated);
+            Assert.AreEqual("First paragraph here.", excerpt);
+            Assert.IsTrue(truncated);
+        }
+
+        [Test]
+        public void ALongFirstLineIsCutAtAWord()
+        {
+            var excerpt = MarkdownText.Excerpt("The hen lays eggs every morning in the coop", 20, out _);
+            Assert.AreEqual("The hen lays eggs…", excerpt);
+        }
+
+        [Test]
+        public void AnExcerptNeverCutsAReferenceInHalf()
+        {
+            // The word break falls inside the reference, between "Red" and "Barn".
+            var excerpt = MarkdownText.Excerpt("See the $[Big Red Barn] now", 18, out _);
+            Assert.AreEqual("See the…", excerpt);
+        }
+
+        [Test]
+        public void AnExcerptKeepsEmojiWhole()
+        {
+            // 🐔 is two chars; a cut between them leaves half an emoji.
+            var excerpt = MarkdownText.Excerpt("aaaaaaaaa🐔bbbbbbbbbb", 10, out _);
+            Assert.AreEqual("aaaaaaaaa…", excerpt);
+        }
     }
 }

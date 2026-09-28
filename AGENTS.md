@@ -59,8 +59,11 @@ Manager não recebe o MCP.
   balanceamento do GDD para dentro de asset. Isso é o binding de planilha / Remote
   Config que o GDD Manager podou em 2026-08; não reintroduzir por aqui.
 - **Vínculo é do time, credencial é da pessoa.** O vínculo asset ↔ página fica
-  versionado junto do projeto (ex.: `userData` do `.meta`), então todo o time
-  vê. Login/token fica em `EditorPrefs`, nunca em arquivo do projeto.
+  versionado junto do projeto, em `ProjectSettings/GddLinks.json` (GUID →
+  página), então todo o time vê. Foi escolhido em vez do `userData` do `.meta`:
+  não reimporta o asset, não disputa o campo com outras ferramentas, vale para
+  pacote somente-leitura e dá a lista de assets de cada página. Login/token fica
+  em `EditorPrefs`, nunca em arquivo do projeto.
 - **Nunca direto ao Supabase.** Só a REST `/api/v1/*` do GDD Manager.
 
 ## Contrato com o GDD Manager

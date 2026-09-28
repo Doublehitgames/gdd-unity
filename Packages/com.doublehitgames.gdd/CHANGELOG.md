@@ -13,6 +13,12 @@
   `EditorPrefs`.
 - The Unity project ↔ GDD link is saved to `ProjectSettings/GddManager.json`,
   meant to be committed.
+- Assets linked to GDD pages: the Inspector of a linked asset shows the page's
+  trail, title and description (foldable), with *Open* in the GDD window; a
+  prefab instance shows its prefab's page. Link from the Inspector with a
+  searchable page picker, or by dragging assets onto a page in the GDD window,
+  which lists each page's linked assets. Links live in
+  `ProjectSettings/GddLinks.json`, keyed by guid, one line per asset.
 
 ## [0.0.1] - 2026-09-28
 

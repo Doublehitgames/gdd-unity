@@ -57,7 +57,32 @@ project id, nothing secret.
 A self-hosted GDD Manager is set in *Other ways to connect → Server* before
 linking.
 
+## Linked pages in the Inspector
+
+Any asset — a ScriptableObject, a prefab, a material, a scene, a folder — can
+be linked to the GDD page that describes it. The Inspector of a linked asset
+then shows, at the top, where the page sits in the document, its title, and
+its description (folded away with one click; long pages continue in the GDD
+window). *Open* shows the page in the GDD window; the **⋮** menu opens it in the
+browser, links the asset to another page or unlinks it.
+
+A prefab instance in a scene shows the page of its prefab.
+
+To link an asset:
+
+- In its Inspector, **Link to a page…** opens the document's tree; type to
+  search every title. Several selected assets are linked at once.
+- Or drag assets from the Project window onto a page in the GDD window. Each
+  page lists its linked assets at the bottom; a click selects the asset.
+
+The links are saved in `ProjectSettings/GddLinks.json`, one line per asset.
+Commit that file: it is how the team shares them. Assets are keyed by guid, so
+moving or renaming an asset keeps its link, and the assets themselves are never
+modified. The path and page title in the file are only there to make diffs
+readable.
+
+The plugin links and shows; it never copies values from the GDD into assets.
+
 ## Planned
 
-- The linked design page shown in the Inspector of the asset it describes.
 - A record of each build, with the packages and versions it shipped with.

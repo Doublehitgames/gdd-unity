@@ -1,3 +1,4 @@
+using System;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -72,6 +73,32 @@ namespace Doublehitgames.Gdd.Editor.Pages
                 sb.Append(Inline(raw, pages, linkColor));
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// The start of a description, for places with little room: whole lines
+        /// up to about <paramref name="maxChars"/>, or a line cut at a word when
+        /// the first one alone is longer. Never cuts a page reference in half.
+        /// </summary>
+        public static string Excerpt(string markdown, int maxChars, out bool truncated)
+        {
+            var text = (markdown ?? "").Replace("\r\n", "\n").Trim();
+            truncated = text.Length > maxChars;
+            if (!truncated) return text;
+
+            var cut = text.LastIndexOf('\n', maxChars);
+            var atLine = cut >= maxChars / 2;
+            if (!atLine)
+            {
+                cut = text.LastIndexOf(' ', maxChars);
+                if (cut < maxChars / 2) cut = maxChars;
+            }
+            var openRef = text.LastIndexOf("$[", cut, StringComparison.Ordinal);
+            if (openRef >= 0 && text.IndexOf(']', openRef) >= cut) cut = openRef;
+            if (cut > 0 && char.IsHighSurrogate(text[cut - 1])) cut--;
+
+            var excerpt = text.Substring(0, cut).TrimEnd();
+            return atLine ? excerpt : excerpt + "…";
         }
 
         // For text that comes from elsewhere (a referenced page's title) and is

@@ -16,6 +16,11 @@
 # Vínculo do sandbox com um GDD — em projeto de verdade esse arquivo É versionado
 # (é como o time compartilha o vínculo); aqui cada dev liga no GDD que quiser testar.
 /ProjectSettings/GddManager.json
+/ProjectSettings/GddLinks.json
+
+# Assets de teste do sandbox (para vincular e ver no Inspector) — cada dev cria os seus
+/[Aa]ssets/_Scratch/
+/[Aa]ssets/_Scratch.meta
 
 # IDE
 .vs/

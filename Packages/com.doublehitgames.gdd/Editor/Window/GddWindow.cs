@@ -5,7 +5,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using Doublehitgames.Gdd.Editor.Api;
 using Doublehitgames.Gdd.Editor.Auth;
+using Doublehitgames.Gdd.Editor.Links;
 using Doublehitgames.Gdd.Editor.Pages;
+using Doublehitgames.Gdd.Editor.Session;
 using Doublehitgames.Gdd.Editor.Settings;
 using UnityEditor;
 using UnityEditor.UIElements;
@@ -29,13 +31,8 @@ namespace Doublehitgames.Gdd.Editor.Window
         [SerializeField] string _search;
         [SerializeField] NavigationHistory _history = new NavigationHistory();
 
-        readonly IHttpTransport _transport = new UnityWebRequestTransport();
-        GddProjectSettings _settings;
-        GddAuth _auth;
-        GddApiClient _api;
         GddMe _me;
         List<PageNode> _roots = new List<PageNode>();
-        PageIndex _pages = PageIndex.Empty;
         CancellationTokenSource _signIn;
         // Bumped on every reload, so a slow answer to an old request is dropped.
         int _generation;
@@ -48,13 +45,46 @@ namespace Doublehitgames.Gdd.Editor.Window
         VisualElement _preview;
         ToolbarButton _backButton;
         ToolbarButton _forwardButton;
+        GddSection _shown;
+        VisualElement _linkedAssets;
+
+        // Shared with the Inspector, which shows the same pages.
+        static GddProjectSettings Settings => GddSession.Settings;
+        static GddAuth Auth => GddSession.Auth;
+        static GddApiClient Api => GddSession.Api;
+        static PageIndex Pages => GddSession.Pages;
 
         [MenuItem("Window/GDD Manager")]
-        public static void Open()
+        static void OpenFromMenu() => Open();
+
+        internal static GddWindow Open()
         {
             var window = GetWindow<GddWindow>();
             window.titleContent = new GUIContent("GDD", EditorGUIUtility.IconContent("d_TextAsset Icon").image);
             window.Show();
+            return window;
+        }
+
+        /// <summary>Opens the window on a page, as following a link would.</summary>
+        internal static void ShowPage(string id)
+        {
+            var window = Open();
+            if (window._tree != null && Pages.ById(id) != null) window.GoTo(id);
+            // Not showing the pages yet: the tree selects it once they are in.
+            else window._selectedId = id;
+            window.Focus();
+        }
+
+        void OnEnable()
+        {
+            GddSession.PagesChanged += OnPagesChanged;
+            ProjectLinks.Changed += FillLinkedAssets;
+        }
+
+        void OnDisable()
+        {
+            GddSession.PagesChanged -= OnPagesChanged;
+            ProjectLinks.Changed -= FillLinkedAssets;
         }
 
         void CreateGUI()
@@ -75,22 +105,15 @@ namespace Doublehitgames.Gdd.Editor.Window
 
         void Reload()
         {
-            _settings = GddProjectSettings.Load();
-            Connect(_settings.Server);
+            GddSession.ReloadSettings();
             _ = LoadAsync();
-        }
-
-        void Connect(string server)
-        {
-            _auth = new GddAuth(server, new EditorPrefsCredentialStore(), _transport);
-            _api = new GddApiClient(server, _transport, _auth);
         }
 
         async Task LoadAsync(string notice = null)
         {
             var generation = ++_generation;
             ClearStatus();
-            if (_auth.Source == CredentialSource.None)
+            if (Auth.Source == CredentialSource.None)
             {
                 ShowSignIn();
                 if (notice != null) SetStatus(notice, HelpBoxMessageType.Info);
@@ -100,20 +123,20 @@ namespace Doublehitgames.Gdd.Editor.Window
             ShowMessage("Connecting to GDD Manager…");
             try
             {
-                _me = await _api.GetMeAsync();
+                _me = await Api.GetMeAsync();
                 if (generation != _generation) return;
 
-                if (!_settings.IsLinked)
+                if (!Settings.IsLinked)
                 {
-                    var projects = await _api.ListProjectsAsync();
+                    var projects = await Api.ListProjectsAsync();
                     if (generation != _generation) return;
                     ShowProjectPicker(projects);
                 }
                 else
                 {
-                    var sections = await _api.ListSectionsAsync(_settings.projectId);
+                    // The pages come in through OnPagesChanged.
+                    await GddSession.LoadPagesAsync();
                     if (generation != _generation) return;
-                    SetPages(sections);
                     ShowPages();
                 }
                 if (notice != null) SetStatus(notice, HelpBoxMessageType.Info);
@@ -133,18 +156,19 @@ namespace Doublehitgames.Gdd.Editor.Window
         {
             switch (e.Kind)
             {
-                case GddErrorKind.Unauthorized when _auth.Source == CredentialSource.Environment:
+                case GddErrorKind.Unauthorized when Auth.Source == CredentialSource.Environment:
                     ShowMessage($"The key in {GddAuth.EnvironmentVariable} was refused by GDD Manager.", ("Retry", Reload));
                     break;
                 case GddErrorKind.Unauthorized:
-                    _auth.SignOut();
+                    Auth.SignOut();
+                    GddSession.ClearPages();
                     ShowSignIn();
                     SetStatus("Your GDD Manager session ended. Sign in again.", HelpBoxMessageType.Warning);
                     break;
                 case GddErrorKind.Forbidden:
                 case GddErrorKind.NotFound:
                     ShowMessage(
-                        $"This project is linked to “{_settings.projectTitle ?? _settings.projectId}”, which {_me?.Label ?? "this account"} cannot open. " +
+                        $"This project is linked to “{Settings.projectTitle ?? Settings.projectId}”, which {_me?.Label ?? "this account"} cannot open. " +
                         "Ask its owner to share it with you, or link this project to another GDD.",
                         ("Link to another GDD…", PickAnotherProject), ("Sign out", SignOut));
                     break;
@@ -170,7 +194,7 @@ namespace Doublehitgames.Gdd.Editor.Window
             EditorApplication.LockReloadAssemblies();
             try
             {
-                await _auth.SignInWithBrowserAsync(Application.OpenURL, signIn.Token);
+                await Auth.SignInWithBrowserAsync(Application.OpenURL, signIn.Token);
                 Debug.Log("[GDD Manager] Signed in through the browser.");
                 if (this == null) return;
                 await LoadAsync();
@@ -201,7 +225,7 @@ namespace Doublehitgames.Gdd.Editor.Window
         {
             try
             {
-                _auth.UseApiKey(key);
+                Auth.UseApiKey(key);
             }
             catch (ArgumentException e)
             {
@@ -213,18 +237,20 @@ namespace Doublehitgames.Gdd.Editor.Window
 
         void SignOut()
         {
-            _auth.SignOut();
+            Auth.SignOut();
+            GddSession.ClearPages();
             _me = null;
-            _ = LoadAsync(_auth.Source == CredentialSource.Environment
+            _ = LoadAsync(Auth.Source == CredentialSource.Environment
                 ? $"Signed out. Still connected through {GddAuth.EnvironmentVariable}."
                 : "Signed out. To revoke this editor's access too, use Connected apps in GDD Manager's API keys settings.");
         }
 
         void Link(GddProject project)
         {
-            _settings.projectId = project.id;
-            _settings.projectTitle = project.title;
-            _settings.Save();
+            Settings.projectId = project.id;
+            Settings.projectTitle = project.title;
+            Settings.Save();
+            GddSession.ClearPages();
             _selectedId = null;
             _ = LoadAsync($"Linked to “{project.title}”. Commit {GddProjectSettings.RelativePath} so the whole team gets the same link.");
         }
@@ -235,7 +261,7 @@ namespace Doublehitgames.Gdd.Editor.Window
             ShowMessage("Loading your GDDs…");
             try
             {
-                var projects = await _api.ListProjectsAsync();
+                var projects = await Api.ListProjectsAsync();
                 if (generation == _generation) ShowProjectPicker(projects);
             }
             catch (GddApiException e) when (generation == _generation)
@@ -258,21 +284,21 @@ namespace Doublehitgames.Gdd.Editor.Window
             signIn.style.height = 28;
             signIn.style.marginTop = 8;
             panel.Add(signIn);
-            if (_auth.Source == CredentialSource.Environment)
+            if (Auth.Source == CredentialSource.Environment)
                 panel.Add(new Button(() => _ = LoadAsync()) { text = $"Keep using {GddAuth.EnvironmentVariable}" });
 
             var other =new Foldout { text = "Other ways to connect", value = false };
             other.style.marginTop = 16;
 
-            var server = new TextField("Server") { value = _settings.Server, isDelayed = true };
-            server.SetEnabled(!_settings.IsLinked);
-            server.tooltip = _settings.IsLinked
+            var server = new TextField("Server") { value = Settings.Server, isDelayed = true };
+            server.SetEnabled(!Settings.IsLinked);
+            server.tooltip = Settings.IsLinked
                 ? $"Set by {GddProjectSettings.RelativePath}, which this project shares with the team."
                 : "Change only for a self-hosted GDD Manager.";
             server.RegisterValueChangedCallback(e =>
             {
-                _settings.serverUrl = GddServer.Normalize(e.newValue);
-                Connect(_settings.Server);
+                Settings.serverUrl = GddServer.Normalize(e.newValue);
+                GddSession.Connect(Settings.Server);
             });
             other.Add(server);
 
@@ -297,7 +323,7 @@ namespace Doublehitgames.Gdd.Editor.Window
             if (projects.Length == 0)
             {
                 panel.Add(Paragraph("This account has no GDD yet. Create one in GDD Manager, then refresh."));
-                panel.Add(new Button(() => Application.OpenURL(_settings.Server)) { text = "Open GDD Manager" });
+                panel.Add(new Button(() => Application.OpenURL(Settings.Server)) { text = "Open GDD Manager" });
                 panel.Add(new Button(Reload) { text = "Refresh" });
             }
             else
@@ -316,7 +342,7 @@ namespace Doublehitgames.Gdd.Editor.Window
 
             panel.Add(Paragraph($"The link is saved in {GddProjectSettings.RelativePath}, to be committed with the project.", small: true));
             var footer = new VisualElement { style = { flexDirection = FlexDirection.Row, marginTop = 8 } };
-            if (_auth.Source == CredentialSource.Environment)
+            if (Auth.Source == CredentialSource.Environment)
                 footer.Add(new Button(ShowSignIn) { text = "Sign in as yourself", tooltip = $"Now connected through {GddAuth.EnvironmentVariable}." });
             else
                 footer.Add(new Button(SignOut) { text = "Sign out" });
@@ -327,6 +353,8 @@ namespace Doublehitgames.Gdd.Editor.Window
         void ShowPages()
         {
             _body.Clear();
+            _shown = null;
+            _linkedAssets = null;
 
             var toolbar = new Toolbar();
             _backButton = NavButton("tab_prev", "‹", "Back (Alt+←)", GoBack);
@@ -335,12 +363,12 @@ namespace Doublehitgames.Gdd.Editor.Window
             toolbar.Add(_forwardButton);
             UpdateNavButtons();
 
-            var menu = new ToolbarMenu { text = _settings.projectTitle ?? "GDD" };
-            menu.menu.AppendAction("Open in browser", _ => Application.OpenURL(GddServer.ProjectPageUrl(_settings.Server, _settings.projectId)));
+            var menu = new ToolbarMenu { text = Settings.projectTitle ?? "GDD" };
+            menu.menu.AppendAction("Open in browser", _ => Application.OpenURL(GddServer.ProjectPageUrl(Settings.Server, Settings.projectId)));
             menu.menu.AppendAction("Link to another GDD…", _ => PickAnotherProject());
             menu.menu.AppendSeparator();
             menu.menu.AppendAction($"Signed in as {_me?.Label}", _ => { }, DropdownMenuAction.Status.Disabled);
-            if (_auth.Source != CredentialSource.Environment)
+            if (Auth.Source != CredentialSource.Environment)
                 menu.menu.AppendAction("Sign out", _ => SignOut());
             else
                 menu.menu.AppendAction($"Sign in as yourself (now using {GddAuth.EnvironmentVariable})…", _ => ShowSignIn());
@@ -385,6 +413,7 @@ namespace Doublehitgames.Gdd.Editor.Window
             _detailScroll = new ScrollView(ScrollViewMode.Vertical) { style = { flexGrow = 1 } };
             _detail = new VisualElement { style = { paddingLeft = 12, paddingRight = 12, paddingTop = 8, paddingBottom = 12 } };
             _detailScroll.Add(_detail);
+            RegisterAssetDrop(_detailScroll);
             split.Add(Pane(_detailScroll));
             _body.Add(split);
 
@@ -440,7 +469,7 @@ namespace Doublehitgames.Gdd.Editor.Window
             if (!string.IsNullOrEmpty(section.updatedByName)) meta.Add("last edited by " + section.updatedByName);
             if (meta.Count > 0) _detail.Add(Paragraph(string.Join("  ·  ", meta), small: true));
 
-            var open = new Button(() => Application.OpenURL(GddServer.SectionPageUrl(_settings.Server, _settings.projectId, section.id)))
+            var open = new Button(() => Application.OpenURL(GddServer.SectionPageUrl(Settings.Server, Settings.projectId, section.id)))
             {
                 text = "Open in browser",
             };
@@ -450,17 +479,112 @@ namespace Doublehitgames.Gdd.Editor.Window
             _detail.Add(open);
 
             if (string.IsNullOrWhiteSpace(section.content))
-            {
                 _detail.Add(Paragraph("This page has no description yet.", small: true));
-                return;
-            }
+            else
+                _detail.Add(PageBody(section.content));
 
-            _detail.Add(PageBody(section.content));
+            _shown = section;
+            _linkedAssets = new VisualElement { style = { marginTop = 16 } };
+            _detail.Add(_linkedAssets);
+            FillLinkedAssets();
         }
+
+        // ── Linked assets ───────────────────────────────────────────────────
+
+        /// <summary>The assets that implement the page on show, from the project's links file.</summary>
+        void FillLinkedAssets()
+        {
+            if (_linkedAssets == null || _shown == null) return;
+            _linkedAssets.Clear();
+            var links = ProjectLinks.Current.ForPage(_shown.id);
+
+            if (links.Count > 0)
+            {
+                var heading = new Label("Linked assets") { style = { unityFontStyleAndWeight = FontStyle.Bold, marginBottom = 4 } };
+                _linkedAssets.Add(heading);
+            }
+            foreach (var link in links) _linkedAssets.Add(LinkedAssetRow(link));
+            _linkedAssets.Add(Paragraph(
+                links.Count == 0
+                    ? "No assets are linked to this page. Drag them here from the Project window, or link them from their Inspector."
+                    : "Drag more assets here from the Project window to link them.",
+                small: true));
+        }
+
+        VisualElement LinkedAssetRow(AssetLink link)
+        {
+            var exists = ProjectLinks.Exists(link);
+            var path = exists ? AssetDatabase.GUIDToAssetPath(link.guid) : link.path;
+
+            var row = new VisualElement { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center, height = 20 } };
+            row.tooltip = path;
+            var icon = new Image { image = exists ? AssetDatabase.GetCachedIcon(path) : null };
+            icon.style.width = icon.style.height = 16;
+            icon.style.marginRight = 4;
+            row.Add(icon);
+
+            var name = new Label(exists ? System.IO.Path.GetFileName(path) : $"{path}  (missing)") { enableRichText = false };
+            name.style.flexGrow = 1;
+            name.style.flexShrink = 1;
+            name.style.overflow = Overflow.Hidden;
+            name.style.textOverflow = TextOverflow.Ellipsis;
+            if (!exists) name.style.opacity = 0.6f;
+            row.Add(name);
+
+            if (exists)
+            {
+                // A click shows the asset in the Project window; the Inspector then
+                // shows it with this page on top.
+                name.RegisterCallback<ClickEvent>(_ =>
+                {
+                    var asset = AssetDatabase.LoadMainAssetAtPath(path);
+                    Selection.activeObject = asset;
+                    EditorGUIUtility.PingObject(asset);
+                });
+            }
+            var unlink = new Button(() => ProjectLinks.Unlink(new[] { link.guid })) { text = "×", tooltip = "Unlink from this page" };
+            unlink.style.width = 20;
+            row.Add(unlink);
+            return row;
+        }
+
+        /// <summary>Assets dragged from the Project window onto the page get linked to it.</summary>
+        void RegisterAssetDrop(VisualElement target)
+        {
+            target.RegisterCallback<DragUpdatedEvent>(_ =>
+            {
+                if (_shown == null || DraggedAssetPaths().Count == 0) return;
+                DragAndDrop.visualMode = DragAndDropVisualMode.Link;
+                SetDropHighlight(target, true);
+            });
+            target.RegisterCallback<DragLeaveEvent>(_ => SetDropHighlight(target, false));
+            target.RegisterCallback<DragExitedEvent>(_ => SetDropHighlight(target, false));
+            target.RegisterCallback<DragPerformEvent>(_ =>
+            {
+                SetDropHighlight(target, false);
+                var paths = DraggedAssetPaths();
+                if (_shown == null || paths.Count == 0) return;
+                DragAndDrop.AcceptDrag();
+
+                var moved = paths.Count(p => ProjectLinks.ForAsset(p) is AssetLink l && l.pageId != _shown.id);
+                var created = ProjectLinks.Link(paths, _shown);
+                var what = paths.Count == 1 ? System.IO.Path.GetFileName(paths[0]) : $"{paths.Count} assets";
+                var message = $"Linked {what} to “{_shown.title}”.";
+                if (moved > 0) message += paths.Count == 1 ? " It was linked to another page before." : $" {moved} of them were linked to another page before.";
+                if (created) message += $" Commit {AssetLinks.RelativePath} so the whole team sees the links.";
+                SetStatus(message, HelpBoxMessageType.Info);
+            });
+        }
+
+        static List<string> DraggedAssetPaths() =>
+            DragAndDrop.paths.Where(p => p.StartsWith("Assets/") || p.StartsWith("Packages/")).Distinct().ToList();
+
+        static void SetDropHighlight(VisualElement target, bool on) =>
+            target.style.backgroundColor = on ? new StyleColor(new Color(0.3f, 0.55f, 1f, 0.12f)) : new StyleColor(StyleKeyword.Null);
 
         Label PageBody(string content)
         {
-            var body = new Label(MarkdownText.ToRichText(content, _pages, LinkColor))
+            var body = new Label(MarkdownText.ToRichText(content, Pages, LinkColor))
             {
                 enableRichText = true,
                 style = { whiteSpace = WhiteSpace.Normal },
@@ -470,7 +594,7 @@ namespace Doublehitgames.Gdd.Editor.Window
             return body;
         }
 
-        static string LinkColor => EditorGUIUtility.isProSkin ? "#6CB4FF" : "#0B63CE";
+        internal static string LinkColor => EditorGUIUtility.isProSkin ? "#6CB4FF" : "#0B63CE";
 
         /// <summary>
         /// A page reference opens a preview first, as on the web: most of the
@@ -481,7 +605,7 @@ namespace Doublehitgames.Gdd.Editor.Window
         {
             if (link.StartsWith(MarkdownText.RefLinkPrefix, StringComparison.Ordinal))
             {
-                var target = _pages.ById(link.Substring(MarkdownText.RefLinkPrefix.Length));
+                var target = Pages.ById(link.Substring(MarkdownText.RefLinkPrefix.Length));
                 if (target == null) return;
                 if (jump) GoTo(target.id);
                 else ShowPreview(target, at);
@@ -500,7 +624,7 @@ namespace Doublehitgames.Gdd.Editor.Window
         /// </summary>
         void GoTo(string id)
         {
-            if (_tree == null || _pages.ById(id) == null) return;
+            if (_tree == null || Pages.ById(id) == null) return;
             ClosePreview();
             _selectedId = id;
             if (!string.IsNullOrEmpty(_search))
@@ -564,7 +688,7 @@ namespace Doublehitgames.Gdd.Editor.Window
         /// <summary>“Mecânicas › Animais ›” above the title: where in the document this page sits.</summary>
         VisualElement Breadcrumb(GddSection section)
         {
-            var ancestors = _pages.Ancestors(section);
+            var ancestors = Pages.Ancestors(section);
             if (ancestors.Count == 0) return null;
 
             var row = new VisualElement { style = { flexDirection = FlexDirection.Row, flexWrap = Wrap.Wrap, marginBottom = 2 } };
@@ -610,7 +734,7 @@ namespace Doublehitgames.Gdd.Editor.Window
             card.style.paddingLeft = card.style.paddingRight = 10;
             card.style.paddingTop = card.style.paddingBottom = 8;
 
-            var path = _pages.Ancestors(section);
+            var path = Pages.Ancestors(section);
             if (path.Count > 0)
                 card.Add(Paragraph(string.Join(" › ", path.Select(p => p.title)), small: true));
             var title = Title(section.title);
@@ -657,11 +781,14 @@ namespace Doublehitgames.Gdd.Editor.Window
             _preview = null;
         }
 
-        void SetPages(GddSection[] sections)
+        void OnPagesChanged()
         {
-            _roots = PageTree.Build(sections);
-            _pages = new PageIndex(sections);
-            _history.Prune(id => _pages.ById(id) != null);
+            _roots = PageTree.Build(GddSession.Sections ?? Array.Empty<GddSection>());
+            if (GddSession.Sections == null) return;
+            _history.Prune(id => Pages.ById(id) != null);
+            UpdateNavButtons();
+            // Fetched again (for the Inspector, or by Refresh) while the window shows them.
+            if (_tree != null) FillTree();
         }
 
         void ShowMessage(string message, params (string label, Action action)[] actions)
